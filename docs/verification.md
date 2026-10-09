@@ -19,6 +19,11 @@ text. Captures are stored with their URL and time in
 [`verification/published_dashboards.json`](verification/published_dashboards.json). The captures
 used here were taken on 2026-10-09 between 16:36 and 16:38 UTC. Each dashboard showed the
 snapshot this build loaded ("Inside Airbnb data: September 16/17/23, 2026").
+A second, independent capture about 2.5 hours later (2026-10-09, 19:06-19:07 UTC, against a
+warehouse rebuilt from scratch) re-read Amsterdam and Austin with identical figures. The
+Singapore page timed out in headless Chrome on that pass, so its comparison fell back to the
+stored capture. `airbnb verify` now reports which cities were read live and which came from the
+stored file (`cities_captured_live`, `cities_from_stored_capture` in `verification.json`).
 
 **What is compared.** The dashboard opens with its default filter, "only short-term rentals":
 minimum nights below the city's threshold (30 nights for all three cities). Missing minimum

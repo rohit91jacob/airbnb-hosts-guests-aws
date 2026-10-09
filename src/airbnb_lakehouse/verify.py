@@ -254,6 +254,7 @@ def _jsonable(rows: list[dict]) -> list[dict]:
 
 def run_verification(settings: Settings, *, capture: bool = False, out: Path | None = None) -> dict:
     captures = json.loads(CAPTURE_PATH.read_text(encoding="utf-8")) if CAPTURE_PATH.exists() else {}
+    live: list[str] = []  # cities re-read from the live dashboard in this run
     if capture:
         con = connect(settings, read_only=True)
         cities = [
@@ -266,9 +267,14 @@ def run_verification(settings: Settings, *, capture: bool = False, out: Path | N
         for city in cities:
             try:
                 captures[city] = capture_dashboard(city)
+                live.append(city)
                 log.info("verify: captured %s (%s)", city, captures[city].get("data_date"))
             except (RuntimeError, subprocess.TimeoutExpired) as exc:
-                log.warning("verify: could not capture %s: %s", city, exc)
+                log.warning(
+                    "verify: could not capture %s (using the stored capture, if any): %s",
+                    city,
+                    exc,
+                )
         CAPTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
         CAPTURE_PATH.write_text(
             json.dumps(captures, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -290,6 +296,10 @@ def run_verification(settings: Settings, *, capture: bool = False, out: Path | N
             "dashboard_metrics_compared": len(dash),
             "dashboard_metrics_exact": sum(1 for r in dash if r["match"]),
             "cities_captured": sorted(captures),
+            # A failed live capture falls back to the stored one; say which is which.
+            "cities_captured_live": sorted(live),
+            "cities_from_stored_capture": sorted(set(captures) - set(live)),
+            "captured_at": {c: captures[c].get("captured_at") for c in sorted(captures)},
         },
     }
     target = out or settings.state_dir / "verification.json"

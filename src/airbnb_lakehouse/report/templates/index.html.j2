@@ -195,7 +195,10 @@ A flag is not a legal finding.</p>
 {% if verification %}
 {% set vs = verification.summary %}
 <p class="note">{{ vs.dashboard_metrics_exact }} of {{ vs.dashboard_metrics_compared }} headline figures captured from the live city dashboards
-match this build exactly. Captured for: {{ vs.cities_captured | join(', ') or 'none' }}. The mismatches are explained in docs/verification.md.</p>
+match this build exactly. Captured for: {{ vs.cities_captured | join(', ') or 'none' }}{% if vs.cities_from_stored_capture %}
+(read live in this run: {{ vs.cities_captured_live | join(', ') or 'none' }}; from the stored capture in docs/verification/published_dashboards.json:
+{% for c in vs.cities_from_stored_capture %}{{ c }} at {{ vs.captured_at[c] }}{{ ', ' if not loop.last }}{% endfor %}){% endif %}.
+Any mismatches are explained in docs/verification.md.</p>
 <div class="scroll"><table>
 <tr><th class="l">City</th><th>Snapshot</th><th class="l">Metric</th><th>Published</th><th>This build</th><th>Difference</th></tr>
 {% for r in verification.dashboards %}

@@ -80,3 +80,41 @@ def test_line_chart_has_legend_direct_labels_and_tooltips():
     assert svg.count("data-tip=") == 4  # one hover target per point
     assert "var(--series-1)" in svg
     assert line_chart([], y_label="x").startswith("<p")
+
+
+def test_failed_live_capture_is_reported_as_stored(tmp_path, monkeypatch):
+    """A dashboard that cannot be rendered falls back to the stored capture, and says so."""
+    import json
+    import subprocess
+
+    from airbnb_lakehouse import verify
+    from airbnb_lakehouse.config import load_settings
+
+    stored = tmp_path / "published_dashboards.json"
+    stored.write_text(
+        json.dumps({"t": {"data_date": "2026-09-23", "captured_at": "2026-10-01T00:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    con = duckdb.connect()
+    con.execute(
+        """CREATE SCHEMA marts; CREATE TABLE marts.mart_city_snapshot_summary AS
+           SELECT * FROM (VALUES ('t', DATE '2026-09-23', 'all', 3208),
+                                 ('u', DATE '2026-09-23', 'all', 10)) v(city, snapshot_date, scope, listings)"""
+    )
+
+    def fake_capture(city, timeout=150):
+        if city == "t":
+            raise subprocess.TimeoutExpired("chrome", timeout)
+        return {"data_date": "2026-09-23", "captured_at": "2026-10-09T00:00:00+00:00"}
+
+    monkeypatch.setenv("AIRBNB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(verify, "CAPTURE_PATH", stored)
+    monkeypatch.setattr(verify, "connect", lambda *a, **k: con.cursor())
+    monkeypatch.setattr(verify, "capture_dashboard", fake_capture)
+    monkeypatch.setattr(verify, "compare_published_estimates", lambda c: [])
+    monkeypatch.setattr(verify, "compare_review_recount", lambda c: [])
+    summary = verify.run_verification(load_settings(), capture=True)["summary"]
+    assert summary["cities_captured"] == ["t", "u"]
+    assert summary["cities_captured_live"] == ["u"]
+    assert summary["cities_from_stored_capture"] == ["t"]
+    assert summary["captured_at"]["t"] == "2026-10-01T00:00:00+00:00"

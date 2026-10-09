@@ -220,12 +220,12 @@ make infra-check        # terraform fmt/validate, tflint, checkov
 
 | Suite | What it covers | Local result (9 Oct 2026) |
 |---|---|---|
-| `tests/unit` (27) | catalog parsing, landing integrity and idempotency, bronze typing, drift and reruns, every DQ check, state-machine routing, CLI exit codes, S3 publish (moto), Terraform ↔ ASL placeholders | 27 passed |
+| `tests/unit` (28) | catalog parsing, landing integrity and idempotency, bronze typing, drift and reruns, every DQ check, state-machine routing, CLI exit codes, S3 publish (moto), Terraform ↔ ASL placeholders, verify's live-vs-stored capture reporting | 28 passed |
 | `tests/e2e` (6) | whole state machine on the real sample; layer reconciliation; site numbers = marts; **rerun leaves every mart and the SCD2 table byte-identical**; full-refresh SCD2 = incremental; failed gate stops before bronze (exit 3) | 6 passed |
 | `tests/aws` (1) | moto: S3 landing, Glue-registered Iceberg, DuckDB reading Iceberg from S3, idempotent reload, Step Functions + Scheduler + SNS + Athena workgroup | 1 passed |
 | dbt | 77 data tests (uniqueness, bounds, accepted values, SCD2 integrity, cross-layer reconciliation) | PASS=102 on real data (2 seeds, 22 models, 1 snapshot, 77 tests) |
 
-The full local run (`make test`) took 9 min 14 s: 34 passed, 81% line + branch coverage.
+The full local run (`make test`) took 13 min 7 s on the development laptop: 35 passed, 84% line + branch coverage.
 
 [`ci.yml`](.github/workflows/ci.yml) runs these jobs: lint (pre-commit: ruff, gitleaks,
 `terraform fmt`, hygiene), unit tests, a fixture job (download once, cached by snapshot
@@ -307,10 +307,13 @@ docs/       data_dictionary.md  runbook.md  verification.md  verification/publis
   `price_quote_total_price` for one stay. That stay is usually the minimum stay, starting a few
   days after the scrape (median 1–13 days here). Changes between snapshots therefore mix real
   repricing with seasonal and dynamic pricing. The SCD2 history records them faithfully but cannot
-  tell the two apart. Singapore's median quoted price rose 63% between the June and September
-  snapshots (same quote length); this build does not explain why.
+  tell the two apart. Singapore's median quoted price rose 59% between the June and September
+  snapshots (S$127.53 to S$202.77 over all priced listings, with the same 6-night median quote
+  length); among listings whose price changed, the median change was +53%. This build does not
+  explain why.
 * **Sentiment is a toy.** It counts 138 hand-picked English words with no negation handling, so
-  non-English reviews mostly carry no signal (64% of Amsterdam and Singapore reviews carry one).
+  non-English reviews mostly carry no signal. Over the last 12 months of reviews, 64% of
+  Amsterdam's and Singapore's (and 94% of Austin's) carry one.
   It is a trend indicator, clearly labelled.
 * **Licence flags are indicative.** The rules are simplified and cite their sources. Inside
   Airbnb's licence field shows whether *something* is filled in, not whether it is valid.
