@@ -1,0 +1,475 @@
+{
+  "Comment": "Inside Airbnb batch lakehouse. Every Task runs the same container image with a different `airbnb` sub-command. Data-quality gates exit non-zero on error-level failures, which fails the ECS task and stops the execution. `airbnb run` walks this same definition locally.",
+  "StartAt": "Discover",
+  "TimeoutSeconds": 21600,
+  "States": {
+    "Discover": {
+      "Type": "Task",
+      "Comment": "List the free Inside Airbnb snapshots and write the run plan",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "discover"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "Land"
+    },
+    "Land": {
+      "Type": "Task",
+      "Comment": "Download new snapshot files to the S3 landing zone (no-op when already landed)",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "ingest"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "LandingDQ"
+    },
+    "LandingDQ": {
+      "Type": "Task",
+      "Comment": "Gate: manifests, archives and CSV headers",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "dq",
+                "--layer",
+                "landing"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "LoadBronze"
+    },
+    "LoadBronze": {
+      "Type": "Task",
+      "Comment": "Typed Iceberg tables in the Glue catalog (partition overwrite)",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "bronze"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 5400,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "BronzeDQ"
+    },
+    "BronzeDQ": {
+      "Type": "Task",
+      "Comment": "Gate: keys, parse rates, calendar coverage",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "dq",
+                "--layer",
+                "bronze"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "Transform"
+    },
+    "Transform": {
+      "Type": "Task",
+      "Comment": "dbt seeds, SCD2 replay rounds and build on Athena",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "transform",
+                "--target",
+                "athena"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 5400,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "MartsDQ"
+    },
+    "MartsDQ": {
+      "Type": "Task",
+      "Comment": "Gate: reconciliation, SCD2 integrity, model bounds",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "dq",
+                "--layer",
+                "marts"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "Report"
+    },
+    "Report": {
+      "Type": "Task",
+      "Comment": "Build the static results site and publish it to S3",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "PropagateTags": "TASK_DEFINITION",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["${subnet_ids}"],
+            "SecurityGroups": [
+              "${security_group_id}"
+            ],
+            "AssignPublicIp": "${assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${container_name}",
+              "Command": [
+                "airbnb",
+                "report"
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "ECS.AmazonECSException",
+            "ECS.ServerException",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Next": "Succeeded"
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Comment": "Publish the failed state and cause to the alerts topic",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${alerts_topic_arn}",
+        "Subject": "airbnb-hosts-guests pipeline failed",
+        "Message.$": "States.Format('Execution {} failed: {}', $$.Execution.Id, $.error.Cause)"
+      },
+      "ResultPath": null,
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "PipelineFailed",
+      "Cause": "A pipeline step or data-quality gate failed; see NotifyFailure."
+    },
+    "Succeeded": {
+      "Type": "Succeed"
+    }
+  }
+}
