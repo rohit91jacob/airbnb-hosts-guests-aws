@@ -1,0 +1,71 @@
+version: 2
+
+models:
+  - name: stg_iab__snapshots
+    description: City snapshots and occupancy-model parameters (one row per city x snapshot).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date]
+    columns:
+      - name: average_nights_stay
+        data_tests:
+          - not_null
+          - between:
+              arguments: {min_value: 1, max_value: 30}
+      - name: str_threshold_nights
+        data_tests: [not_null]
+
+  - name: stg_iab__listings
+    description: Listings with parsed prices and the dashboard's licence classification.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [listing_key, snapshot_date]
+    columns:
+      - name: listing_key
+        data_tests: [not_null]
+      - name: host_id
+        data_tests: [not_null]
+      - name: room_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["Entire home/apt", "Private room", "Shared room", "Hotel room"]
+      - name: price
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1000000}
+      - name: minimum_nights
+        data_tests:
+          - between:
+              arguments: {min_value: 1}
+      - name: licence_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [licensed, unlicensed, exempt, pending]
+
+  - name: stg_iab__calendar
+    description: Nightly availability, 365 nights ahead of each snapshot.
+    columns:
+      - name: calendar_date
+        data_tests: [not_null]
+      - name: available
+        data_tests: [not_null]
+
+  - name: stg_iab__reviews
+    description: >
+      Guest reviews (cleaned text, no reviewer names). Grain is review x listing: Inside Airbnb
+      attaches one review to every sibling listing of some multi-room hotels, so review_id
+      alone is not unique.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [review_id, listing_key]
+    columns:
+      - name: review_id
+        data_tests: [not_null]
+      - name: review_date
+        data_tests: [not_null]

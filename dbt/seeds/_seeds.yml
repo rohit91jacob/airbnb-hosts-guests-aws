@@ -1,0 +1,41 @@
+version: 2
+
+seeds:
+  - name: sentiment_lexicon
+    description: >
+      Hand-written English word list for the simple review-sentiment indicator (written for
+      this project, MIT licensed; not derived from a third-party lexicon).
+    config:
+      column_types:
+        word: varchar
+        polarity: varchar
+    columns:
+      - name: word
+        data_tests: [unique, not_null]
+      - name: polarity
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [positive, negative]
+
+  - name: city_regulation
+    description: One row per indicative city rule used by mart_licence_compliance, with sources.
+    config:
+      column_types:
+        city: varchar
+        rule_id: varchar
+        rule_type: varchar
+        threshold: integer
+        room_type_scope: varchar
+        exclude_licence_regex: varchar
+        description: varchar
+        source_url: varchar
+        source_note: varchar
+    columns:
+      - name: rule_id
+        data_tests: [unique, not_null]
+      - name: rule_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [est_nights_above, min_nights_below, unlicensed_short_term]

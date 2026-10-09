@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: iab
+    description: >
+      Inside Airbnb bronze tables (Apache Iceberg). Locally: DuckDB views over iceberg_scan()
+      created by `airbnb expose`. On AWS: Iceberg tables registered in the Glue database
+      that Terraform creates.
+    schema: "{{ env_var('AIRBNB_BRONZE_NAMESPACE', 'bronze') }}"
+    tables:
+      - name: snapshots
+        description: One row per landed city snapshot, with the dashboard's model parameters.
+        columns:
+          - name: city
+            data_tests: [not_null]
+          - name: snapshot_date
+            data_tests: [not_null]
+      - name: listings
+        description: listings.csv.gz, typed. One row per listing per snapshot.
+        columns:
+          - name: listing_id
+            data_tests: [not_null]
+      - name: calendar
+        description: calendar.csv.gz, typed. One row per listing per night (365 nights ahead).
+      - name: reviews
+        description: reviews.csv.gz from the newest snapshot per city (the file is cumulative).
+        columns:
+          - name: review_id
+            data_tests: [not_null]
+      - name: load_audit
+        description: Row counts, source hashes and parse failures for each bronze load.

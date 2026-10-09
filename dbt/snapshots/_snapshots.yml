@@ -1,0 +1,15 @@
+version: 2
+
+snapshots:
+  - name: snap_listing_attributes
+    description: >
+      SCD2 history of listing price and attributes (one row per listing version).
+      dbt_valid_from / dbt_valid_to are Inside Airbnb snapshot dates (replay clock), not run
+      times. dbt_valid_to is null for the current version.
+    columns:
+      - name: listing_key
+        data_tests: [not_null]
+      - name: dbt_scd_id
+        data_tests: [unique, not_null]
+      - name: dbt_valid_from
+        data_tests: [not_null]

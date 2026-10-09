@@ -1,0 +1,43 @@
+name: airbnb
+version: "1.0.0"
+config-version: 2
+profile: airbnb
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: ["target", "logs"]
+
+vars:
+  # Inside Airbnb "San Francisco model" (https://insideairbnb.com/data-assumptions/), as
+  # implemented by the v2 city dashboards: bookings = reviews in the last 12 months / review
+  # rate; nights = bookings x max(minimum nights, city average stay), capped.
+  review_rate: 0.5
+  max_nights_per_year: 255 # ~70% of 365: the model's occupancy cap
+  highly_available_days: 90 # dashboard "highly available": availability_365 > 90
+  # Set by `airbnb transform` for each SCD2 replay round (see snapshots/snap_listing_attributes.sql).
+  as_of_round: null
+
+models:
+  airbnb:
+    +table_type: iceberg # Athena only; dbt-duckdb ignores it
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: table
+    marts:
+      +schema: marts
+      +materialized: table
+
+seeds:
+  airbnb:
+    +schema: reference
+
+snapshots:
+  airbnb:
+    +schema: snapshots

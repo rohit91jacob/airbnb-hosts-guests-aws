@@ -1,0 +1,167 @@
+version: 2
+
+models:
+  - name: fct_listing_snapshot
+    description: One listing in one snapshot, with model estimates and calendar availability.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [listing_key, snapshot_date]
+    columns:
+      - name: listing_key
+        data_tests: [not_null]
+      - name: unavailable_share_30
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: mart_city_snapshot_summary
+    description: City x snapshot x scope ('all' | 'short_term' | 'dashboard_default') headline metrics, incl. dashboard-convention columns (dash_*).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date, scope]
+    columns:
+      - name: scope
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [all, short_term, dashboard_default]
+      - name: entire_home_share
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+      - name: multi_host_listing_share
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+      - name: listings
+        data_tests:
+          - between:
+              arguments: {min_value: 1}
+
+  - name: mart_host_portfolio
+    description: City x snapshot host structure (single vs multi-listing hosts, superhosts, churn).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date]
+    columns:
+      - name: superhost_share_of_hosts
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+      - name: multi_listing_host_listing_share
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: mart_top_hosts
+    description: Top 20 hosts by listings per city x snapshot.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date, host_rank]
+
+  - name: mart_occupancy_availability
+    description: Calendar availability and modelled occupancy per city x snapshot x room type.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date, room_type]
+    columns:
+      - name: mean_est_occupancy_rate
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 0.7}
+      - name: mean_unavailable_share_30
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: mart_revenue_estimates
+    description: Modelled revenue, ADR and RevPAL per city x snapshot x room type (estimates).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date, room_type]
+    columns:
+      - name: est_adr
+        data_tests:
+          - between:
+              arguments: {min_value: 0}
+
+  - name: mart_price_change_history
+    description: SCD2 versions of each listing with what changed and by how much.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [listing_key, version_number]
+    columns:
+      - name: change_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [first_seen, price_added, price_removed, price_up, price_down, attributes_only]
+
+  - name: mart_price_change_summary
+    description: City x snapshot changes since the previous snapshot (from SCD2).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date]
+    columns:
+      - name: price_changed_share
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: mart_review_velocity
+    description: Reviews per city x month with year-over-year comparison.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, review_month]
+
+  - name: mart_guest_sentiment
+    description: Simple-lexicon sentiment per city x month (clearly labelled method).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, review_month]
+    columns:
+      - name: lexicon_coverage
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: mart_neighbourhood_supply
+    description: Supply mix per city x snapshot x neighbourhood and change vs previous snapshot.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date, neighbourhood]
+
+  - name: mart_licence_compliance
+    description: Licence status and indicative city-rule flags per city x snapshot x rule.
+    columns:
+      - name: flagged_share
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 1}
+
+  - name: dim_city_snapshot
+    description: City x snapshot calendar with the occupancy-model parameters (table copy of stg_iab__snapshots).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, snapshot_date]
+    columns:
+      - name: average_nights_stay
+        data_tests: [not_null]
+
+  - name: dim_listing
+    description: One row per listing ever seen, with last known attributes and lifecycle.
+    columns:
+      - name: listing_key
+        data_tests: [unique, not_null]

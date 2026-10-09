@@ -1,0 +1,65 @@
+version: 2
+
+models:
+  - name: int_listing_snapshots
+    description: Listing x snapshot with city parameters, flags and the occupancy model.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [listing_key, snapshot_date]
+    columns:
+      - name: est_nights_ltm
+        data_tests:
+          - not_null
+          - between:
+              arguments: {min_value: 0, max_value: 255}
+      - name: est_occupancy_rate
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 0.7}
+      - name: est_revenue_ltm
+        data_tests:
+          - between:
+              arguments: {min_value: 0}
+
+  - name: int_calendar_availability
+    description: Forward availability per listing x snapshot.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [listing_key, snapshot_date]
+    columns:
+      - name: available_nights_30
+        data_tests:
+          - between:
+              arguments: {min_value: 0, max_value: 30}
+      - name: calendar_nights
+        data_tests:
+          - between:
+              arguments: {min_value: 1, max_value: 367}
+
+  - name: int_review_sentiment
+    description: Lexicon sentiment per review (simple method; see the model header).
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [city, review_id]
+    columns:
+      - name: review_id
+        data_tests: [not_null]
+      - name: sentiment_label
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [positive, negative, mixed, no_signal]
+      - name: sentiment_score
+        data_tests:
+          - between:
+              arguments: {min_value: -1, max_value: 1}
+
+  - name: int_hosts
+    description: Host portfolio per city x snapshot.
+    data_tests:
+      - unique_combination:
+          arguments:
+            combination: [host_key, snapshot_date]
