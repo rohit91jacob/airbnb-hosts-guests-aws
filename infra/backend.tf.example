@@ -1,0 +1,11 @@
+# Copy to backend.tf for a real deployment, then `terraform init -migrate-state`.
+# The state bucket is created out of band (it cannot live in the stack it describes).
+terraform {
+  backend "s3" {
+    bucket       = "REPLACE-with-your-terraform-state-bucket"
+    key          = "airbnb-hosts-guests/dev/terraform.tfstate"
+    region       = "eu-west-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
