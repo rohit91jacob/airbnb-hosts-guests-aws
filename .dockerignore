@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+data
+site
+tests
+docs
+**/__pycache__
+.pytest_cache
+.ruff_cache
+dbt/target
+dbt/target-athena
+dbt/logs
+infra/.terraform
+*.log
+.env

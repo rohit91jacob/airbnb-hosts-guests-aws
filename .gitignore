@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Data: never committed (Inside Airbnb asks people not to republish it)
+data/
+*.duckdb
+*.duckdb.wal
+tests/fixtures/insideairbnb/
+
+# dbt
+dbt/target/
+dbt/target-athena/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
+# Terraform
+infra/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+infra/backend.tf
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Generated results site (published by refresh.yml)
+site/

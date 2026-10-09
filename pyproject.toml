@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "airbnb-hosts-guests-aws"
+version = "0.1.0"
+description = "Batch lakehouse on Inside Airbnb snapshots: S3 landing -> Iceberg (Glue-style catalog) -> dbt marts with SCD2 price history, orchestrated by Step Functions. AWS is emulated locally."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "rohit91jacob" }]
+keywords = ["airbnb", "inside-airbnb", "iceberg", "dbt", "duckdb", "aws", "lakehouse", "scd2"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "boto3>=1.43.110",
+    "dbt-core>=1.12.5",
+    "dbt-duckdb>=1.11.0",
+    "duckdb>=1.5.6",
+    "jinja2>=3.1.6",
+    "pyarrow>=26.0.0",
+    "pyiceberg[pyarrow,sql-sqlite]>=0.12.0",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+airbnb = "airbnb_lakehouse.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rohit91jacob/airbnb-hosts-guests-aws"
+Data = "https://insideairbnb.com/get-the-data/"
+
+[dependency-groups]
+athena = [
+    "dbt-athena>=1.11.1",
+]
+dev = [
+    "moto[athena,glue,s3,server,stepfunctions]>=5.2.3",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airbnb_lakehouse"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["dbt/target", "dbt/dbt_packages", "dbt/logs"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PTH", "N", "S", "T20", "PL", "TRY"]
+ignore = [
+    "PLR0913", # CLI/loader helpers legitimately take many params
+    "PLR2004", # magic values are fine in data rules
+    "TRY003",  # long exception messages are useful context here
+    "S608",    # SQL is built from declared column lists / validated identifiers only
+    "E501",    # ruff format owns line length; long SQL strings are left intact
+    "PLC0415", # deliberate lazy imports keep `airbnb --help` and light commands fast
+    "T201",    # the CLI prints JSON results to stdout by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "S603", "S607", "S105", "S106"]
+"scripts/**" = ["T201", "S310"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "e2e: end-to-end pipeline runs on the real-data fixture sample",
+    "aws: AWS code paths against moto (in-process) or an emulator endpoint",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore:Delete operation did not match any records",
+]
+
+[tool.coverage.run]
+source = ["airbnb_lakehouse"]
+branch = true
