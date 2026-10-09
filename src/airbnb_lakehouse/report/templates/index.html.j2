@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airbnb hosts, guests and rooms: Inside Airbnb lakehouse results</title>
+<meta name="description" content="Host portfolios, occupancy and revenue estimates, SCD2 price history, review velocity and licence compliance from Inside Airbnb snapshots.">
+<style>
+:root {
+  --page: #f9f9f7; --surface-1: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --good: #006300; --bad: #d03b3b;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d; --surface-1: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --good: #0ca30c; --bad: #e66767;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 64px; }
+h1 { font-size: 1.7rem; margin: 0 0 4px; }
+h2 { font-size: 1.25rem; margin: 40px 0 8px; border-bottom: 1px solid var(--grid); padding-bottom: 6px; }
+h3 { font-size: 1rem; margin: 20px 0 6px; }
+p { margin: 6px 0; }
+a { color: var(--series-1); }
+.muted, .note { color: var(--ink-2); }
+.note { font-size: .88rem; }
+.badge { display: inline-block; font-size: .75rem; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--axis); color: var(--ink-2); margin-left: 6px; vertical-align: middle; font-weight: 400; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+.card { background: var(--surface-1); border: 1px solid var(--grid); border-radius: 8px; padding: 14px 16px; }
+.card h3 { margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+.card h3 i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; margin-top: 10px; }
+.tile b { display: block; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.tile span { font-size: .78rem; color: var(--ink-2); }
+.tile em { font-style: normal; margin-left: 4px; }
+.up { color: var(--good); } .down { color: var(--bad); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; margin: 8px 0; background: var(--surface-1); }
+th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child, td.l, th.l { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; }
+.chart { width: 100%; height: auto; background: var(--surface-1); border-radius: 6px; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 11px; }
+.chart .direct { fill: var(--ink-2); font-size: 12px; }
+.chart .pt { cursor: pointer; }
+.legend { display: flex; gap: 16px; font-size: .85rem; color: var(--ink-2); margin: 8px 0; }
+.legend .key i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+#tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--page); font-size: .8rem; padding: 4px 8px; border-radius: 4px; display: none; z-index: 10; }
+details { margin: 8px 0; } summary { cursor: pointer; color: var(--ink-2); }
+.pass { color: var(--good); } .fail { color: var(--bad); font-weight: 600; }
+footer { margin-top: 48px; font-size: .82rem; color: var(--ink-2); border-top: 1px solid var(--grid); padding-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Airbnb hosts, guests and rooms</h1>
+  <p class="muted">A batch lakehouse over <a href="https://insideairbnb.com/get-the-data/">Inside Airbnb</a> quarterly snapshots of
+  {% for c in cities %}{{ c.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  Built {{ today }} from {{ summary.snapshots | length }} snapshots ({{ summary.snapshots | join(', ') }}).
+  <a href="{{ repo_url }}">Source code</a>.</p>
+  <p class="note">Every number on this page comes from the last pipeline run. The data is real. The AWS services in the design (S3, Glue,
+  Athena, Step Functions) are <strong>emulated locally</strong> for this build. Occupancy, revenue and ADR are
+  <strong>model estimates</strong>, not reported bookings. Prices are in each city's local currency, so cities are never summed.</p>
+</header>
+
+<section>
+<h2>Latest snapshot by city</h2>
+<div class="cards">
+{% for c in cities %}
+<div class="card">
+  <h3><i style="background:var(--series-{{ loop.index }})"></i>{{ c.name }} <span class="badge">{{ c.date }}</span></h3>
+  <p class="note">{{ c.country }}. Previous snapshot: {{ c.prev_date or '–' }}.</p>
+  <div class="tiles">
+    <div class="tile"><b>{{ c.listings | int }}</b><span>listings{% if c.listings_change is not none %}<em class="{{ 'up' if c.listings_change >= 0 else 'down' }}">{{ c.listings_change | spct }}</em>{% endif %}</span></div>
+    <div class="tile"><b>{{ c.hosts | int }}</b><span>hosts</span></div>
+    <div class="tile"><b>{{ c.entire_share | pct(0) }}</b><span>entire homes</span></div>
+    <div class="tile"><b>{{ c.multi_host_listing_share | pct(0) }}</b><span>listings run by multi-listing hosts</span></div>
+    <div class="tile"><b>{{ c.superhost_hosts | pct(0) }}</b><span>hosts who are Superhosts</span></div>
+    <div class="tile"><b>{{ c.occ | pct(0) }}</b><span>est. occupancy (model)</span></div>
+    <div class="tile"><b>{{ c.adr | money(c.sym) }}</b><span>est. ADR (model)</span></div>
+    <div class="tile"><b>{{ c.median_rev | money(c.sym) }}</b><span>median est. revenue per listing, 12 months</span></div>
+    <div class="tile"><b>{{ c.unlicensed_share | pct(0) }}</b><span>no licence text</span></div>
+  </div>
+</div>
+{% endfor %}
+</div>
+</section>
+
+<section>
+<h2>Host portfolio</h2>
+<p class="note">A host's portfolio is the number of their listings in that city's snapshot. "Multi-listing" means two or more.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Snapshot</th><th>Listings</th><th>Hosts</th><th>Single-listing hosts</th><th>Listings of multi-listing hosts</th><th>Listings of 10+ hosts</th><th>Superhosts (of hosts)</th><th>Superhosts (of listings)</th><th>New hosts</th><th>Departed hosts</th></tr>
+{% for c in cities %}{% set h = d.hosts[(c.city, c.date)] %}
+<tr><td>{{ c.name }}</td><td>{{ c.date }}</td><td>{{ h.listings | int }}</td><td>{{ h.hosts | int }}</td><td>{{ h.single_listing_host_share | pct }}</td><td>{{ h.multi_listing_host_listing_share | pct }}</td><td>{{ h.ten_plus_host_listing_share | pct }}</td><td>{{ h.superhost_share_of_hosts | pct }}</td><td>{{ h.superhost_share_of_listings | pct }}</td><td>{{ h.new_hosts | int }}</td><td>{{ h.departed_hosts | int }}</td></tr>
+{% endfor %}
+</table></div>
+<h3>Largest portfolios (latest snapshot)</h3>
+<p class="note">Hosts appear by rank and listing count only. Host names are not published here.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Rank</th><th>Listings</th><th>Entire homes</th><th>Private rooms</th><th>Other</th><th>Superhost</th></tr>
+{% for t in d.top_hosts %}
+<tr><td>{{ d.latest[t.city].city_name }}</td><td>{{ t.host_rank }}</td><td>{{ t.listings | int }}</td><td>{{ t.entire_homes | int }}</td><td>{{ t.private_rooms | int }}</td><td>{{ t.other_rooms | int }}</td><td>{{ 'yes' if t.is_superhost else 'no' }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Occupancy, ADR and revenue <span class="badge">estimates</span></h2>
+<p class="note">There are two separate measures. <strong>Calendar</strong>: the share of the next 30 nights that are not available. Airbnb's calendar
+does not separate booked nights from nights the host blocked, so this is an upper bound. <strong>Occupancy model</strong>: Inside Airbnb's
+"San Francisco model". Bookings = reviews in the last 12 months ÷ 0.5, because half of stays are assumed to leave a review. Nights per booking =
+the larger of minimum nights and the city's average stay. Nights are capped at 255 a year (70%). Revenue = nights × listed price.
+ADR = estimated revenue ÷ estimated booked nights, for listings with a price.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Average stay used</th><th>Next 30 nights unavailable</th><th>Highly available (&gt;90 nights/yr)</th><th>Est. occupancy</th><th>Frequently booked</th><th>Est. ADR</th><th>Est. RevPAL</th><th>Median est. revenue</th><th>Listings with a price</th></tr>
+{% for c in cities %}
+<tr><td>{{ c.name }}</td><td>{{ '%.1f' | format(c.avg_stay) }} nights</td><td>{{ c.unavail30 | pct }}</td><td>{{ c.highly_available | pct }}</td><td>{{ c.occ | pct }}</td><td>{{ c.frequently_booked | pct }}</td><td>{{ c.adr | money(c.sym) }}</td><td>{{ c.revpal | money(c.sym) }}</td><td>{{ c.median_rev | money(c.sym) }}</td><td>{{ c.priced_share | pct }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Price change history <span class="badge">SCD Type 2</span></h2>
+<p class="note">Each listing's price and tracked attributes are versioned across snapshots with dbt snapshots, replayed in snapshot order.
+The history holds {{ d.scd2.versions | int }} versions of {{ d.scd2.listings | int }} listings, {{ d.scd2.current_versions | int }} of them currently open.
+The changed share only counts listings that had a price in both snapshots.
+<strong>Read with care:</strong> Inside Airbnb's price is the nightly rate quoted for one specific upcoming stay. In these snapshots the quote
+is usually for the minimum stay and starts a few days after the scrape (median 1 to 13 days). So the price moves with seasonal and dynamic pricing,
+and many "changes" reflect a different stay date rather than a host editing a list price.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Change window</th><th>Priced in both</th><th>Price up</th><th>Price down</th><th>Changed share</th><th>Median change</th><th>New listings</th><th>Delisted</th><th>Min-nights changes</th><th>Licence changes</th></tr>
+{% for c in cities %}{% set p = c.price %}{% if p %}
+<tr><td>{{ c.name }}</td><td>{{ p.previous_snapshot_date }} → {{ p.snapshot_date }}</td><td>{{ p.priced_in_both | int }}</td><td>{{ p.price_increases | int }}</td><td>{{ p.price_decreases | int }}</td><td>{{ p.price_changed_share | pct }}</td><td>{{ p.median_price_change_pct | spct }}</td><td>{{ p.new_listings | int }}</td><td>{{ p.delisted_listings | int }}</td><td>{{ p.minimum_nights_changes | int }}</td><td>{{ p.licence_changes | int }}</td></tr>
+{% endif %}{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Review velocity</h2>
+<p class="note">Reviews written per month, from each city's newest reviews file. That file only holds reviews of listings that are still listed,
+so older months are undercounted. The current month is partial and is left out.</p>
+{{ velocity_svg | safe }}
+<details><summary>Table view</summary>
+<div class="scroll"><table><tr><th class="l">Month</th><th class="l">City</th><th>Reviews</th><th>Year on year</th></tr>
+{% for v in velocity_table %}<tr><td>{{ v.month.strftime('%Y-%m') }}</td><td class="l">{{ v.city }}</td><td>{{ v.reviews | int }}</td><td>{{ v.yoy | spct }}</td></tr>{% endfor %}
+</table></div></details>
+</section>
+
+<section>
+<h2>Guest sentiment <span class="badge">simple lexicon</span></h2>
+<p class="note"><strong>Method:</strong> each review is scored by counting words from a short hand-written English word list
+(72 positive and 66 negative words). There is no negation handling and no language model. Reviews in other languages mostly carry no signal.
+Treat it as a rough trend indicator only. Covers the last 12 months of reviews.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Reviews</th><th>With a lexicon signal</th><th>Positive (of signalled)</th><th>Negative (of signalled)</th></tr>
+{% for s in d.sentiment %}
+<tr><td>{{ d.latest[s.city].city_name }}</td><td>{{ s.reviews | int }}</td><td>{{ s.coverage | pct }}</td><td>{{ s.positive_share | pct }}</td><td>{{ s.negative_share | pct }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Neighbourhood supply (top 8 per city)</h2>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th class="l">Neighbourhood</th><th>Listings</th><th>Share of city</th><th>Change vs previous</th><th>Entire homes</th><th>Multi-listing hosts</th><th>Median price</th></tr>
+{% for n in d.neighbourhoods %}
+<tr><td>{{ d.latest[n.city].city_name }}</td><td class="l">{{ n.neighbourhood }}</td><td>{{ n.listings | int }}</td><td>{{ n.share_of_city_listings | pct }}</td><td>{{ n.listings_change_pct | spct }}</td><td>{{ n.entire_home_share | pct(0) }}</td><td>{{ n.multi_host_listing_share | pct(0) }}</td><td>{{ n.median_price | money(d.latest[n.city].currency_symbol or '') }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Licences and regulation <span class="badge">indicative</span></h2>
+<p class="note">Licence status follows the Inside Airbnb dashboard rule: the field is empty, says exempt, says pending, or holds anything else
+(counted as licensed). Nothing here checks whether a licence number is valid. The city rules are simplified and link to their sources.
+A flag is not a legal finding.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Licensed</th><th>Unlicensed</th><th>Exempt</th><th>Pending</th><th class="l">Rule</th><th>In scope</th><th>Flagged</th><th>Flagged share</th></tr>
+{% for r in d.compliance %}
+<tr><td>{{ d.latest[r.city].city_name }}</td><td>{{ r.licensed | int }}</td><td>{{ r.unlicensed | int }}</td><td>{{ r.exempt | int }}</td><td>{{ r.pending | int }}</td>
+<td class="l">{% if r.rule_id %}<a href="{{ r.rule_source_url }}" title="{{ r.rule_description }}">{{ r.rule_id }}</a>{% else %}–{% endif %}</td><td>{{ r.listings_in_scope | int }}</td><td>{{ r.listings_flagged | int }}</td><td>{{ r.flagged_share | pct }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section>
+<h2>Verification against Inside Airbnb's own figures</h2>
+{% if verification %}
+{% set vs = verification.summary %}
+<p class="note">{{ vs.dashboard_metrics_exact }} of {{ vs.dashboard_metrics_compared }} headline figures captured from the live city dashboards
+match this build exactly. Captured for: {{ vs.cities_captured | join(', ') or 'none' }}. The mismatches are explained in docs/verification.md.</p>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Snapshot</th><th class="l">Metric</th><th>Published</th><th>This build</th><th>Difference</th></tr>
+{% for r in verification.dashboards %}
+<tr><td>{{ r.city }}</td><td>{{ r.snapshot_date }}</td><td class="l">{{ r.metric }}</td><td>{{ r.published | int }}</td><td>{{ r.ours | int }}</td><td class="{{ 'pass' if r.match else 'fail' }}">{{ 'match' if r.match else (r.diff | int) }}</td></tr>
+{% endfor %}
+</table></div>
+<h3>Our occupancy model compared with Inside Airbnb's published per-listing estimates</h3>
+<div class="scroll"><table>
+<tr><th class="l">City</th><th>Snapshot</th><th>Listings</th><th>Nights exactly equal</th><th>Within 10%</th><th>Our nights</th><th>Published nights</th></tr>
+{% for r in verification.published_estimates %}
+<tr><td>{{ r.city }}</td><td>{{ r.snapshot_date }}</td><td>{{ r.listings | int }}</td><td>{{ r.nights_exact_share | pct }}</td><td>{{ r.nights_within_10pct_share | pct }}</td><td>{{ r.our_nights | int }}</td><td>{{ r.published_nights | int }}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No verification has been run for this build (<code>airbnb verify</code>).</p>
+{% endif %}
+</section>
+
+<section>
+<h2>Data-quality gates</h2>
+<p class="note">A failed error-level check stops the pipeline before the next layer is built. Warnings are recorded but do not block.</p>
+{% for layer, s in dq.items() %}{% if s %}
+<details {% if s.errors_failed or s.warnings_failed %}open{% endif %}><summary><strong>{{ layer }}</strong>:
+{{ s.results | length }} checks, <span class="{{ 'fail' if s.errors_failed else 'pass' }}">{{ s.errors_failed }} errors</span>, {{ s.warnings_failed }} warnings</summary>
+<div class="scroll"><table><tr><th class="l">Check</th><th class="l">Severity</th><th>Violations</th><th class="l">Description</th></tr>
+{% for r in s.results %}<tr><td class="l">{{ r.name }}</td><td class="l">{{ r.severity }}</td><td class="{{ 'pass' if r.passed else 'fail' }}">{{ r.violations | int }}</td><td class="l">{{ r.description }}</td></tr>{% endfor %}
+</table></div></details>
+{% endif %}{% endfor %}
+</section>
+
+<footer>
+<p>Data: <a href="https://insideairbnb.com/">Inside Airbnb</a>, licensed under
+<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. This page shows aggregates only.
+This project has no connection to Airbnb or Inside Airbnb. Code: MIT. Generated {{ summary.generated_at }}; plan {{ summary.plan_fingerprint or '–' }}.</p>
+</footer>
+</main>
+<div id="tip" role="status"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  document.querySelectorAll('[data-tip]').forEach(function (el) {
+    el.addEventListener('mouseenter', function () { tip.textContent = el.getAttribute('data-tip'); tip.style.display = 'block'; });
+    el.addEventListener('mousemove', function (e) { tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY - 28) + 'px'; });
+    el.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+  });
+})();
+</script>
+</body>
+</html>
