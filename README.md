@@ -278,22 +278,77 @@ tests/      unit/ (synthetic vectors)  e2e/ (real sample)  aws/ (moto, LocalStac
 docs/       data_dictionary.md  runbook.md  verification.md  verification/published_dashboards.json
 ```
 
-## Design decisions and trade-offs
+## Design rationale
 
-* **One state machine, two executors.** Running the deployed ASL file locally means the step
-  order and the gates cannot drift between laptop and cloud. The cost: the local runner supports
-  only Task, Succeed and Fail states, and it does not emulate retries.
-* **Iceberg written by pyiceberg, read by DuckDB.** There is no Spark: three cities fit easily
-  on one machine, and on AWS one Fargate task. Partition overwrites make reloads idempotent.
-  Pinning `metadata.json` gives each dbt run a consistent view.
-* **SCD2 replay clock.** dbt snapshots normally stamp "now". Here each snapshot date is replayed
-  as its own round, with `snapshot_get_time()` overridden, so `valid_from` is when Inside Airbnb
-  observed the change. Rebuilds are then deterministic, and the e2e suite checks that.
-* **Bronze keeps raw strings where parsing is a business rule.** `price` is parsed in dbt, where
-  a test covers the rule. Bronze casts everything else and records failures instead of dropping
-  rows.
-* **Respect the source.** Nothing is republished, each file is downloaded once, and the
-  site shows aggregates without names.
+Five constraints shaped the design. The data is real and public, but Inside Airbnb asks that it
+not be republished, so no rows are committed and the real-data fixtures are cut from a download.
+The live refresh runs monthly on GitHub-hosted runners and needs no credentials. There is no AWS
+account, so every AWS service needs a stand-in that runs the same code (filesystem and SQLite on
+a laptop without Docker, moto in tests, LocalStack in CI), and the Terraform is validated, not
+applied. The deployed shape has to stay cheap: the budget defaults to $15 a month. And rebuilds
+have to be deterministic: a rebuild from scratch must reproduce the history built round by round.
+The data is small (332 MB of gzip for six snapshots), so single-machine tools are enough.
+
+### Architecture decisions
+
+| Decision | Why | Alternatives considered | Trade-off accepted |
+|---|---|---|---|
+| **One state machine, two executors** (`infra/statemachine/pipeline.asl.json`, `orchestrate.py`) | Terraform deploys the ASL file through `templatefile()`, and `airbnb run` walks the same file, so step order and gates cannot drift between laptop, CI and cloud. A unit test fails if Terraform stops supplying a placeholder the file uses. | A local Makefile or script plus a cloud workflow kept in step by hand; running the definition in an emulator (moto registers it but does not run ECS tasks). | The local runner supports only Task, Succeed and Fail states and does not emulate `Retry`, so no test exercises retries or timeouts. |
+| **Land files byte-for-byte, manifest last** (`ingest.py`, `storage.py`) | A snapshot counts as landed only once every gzip stream has been fully decompressed and its SHA-256, ETag and sizes recorded. Writes are atomic, so an interrupted run leaves nothing a later run would trust. Keys (`city=/snapshot_date=`) are the same on disk and on S3. | Converting to Parquet while downloading; trusting the HTTP status alone. | Raw and typed copies both exist (332 MB of gzip plus 262 MB of Iceberg Parquet). Files are assumed immutable per date; `airbnb ingest --force` re-downloads if that ever breaks. |
+| **Bronze is a declared contract** (`bronze.py`) | DuckDB reads each CSV as text and projects declared columns with `TRY_CAST`. Inside Airbnb adds and renames columns over time, so drift and cast failures go to `load_audit` and the gates instead of crashing a load or dropping rows. `price` stays raw text and is parsed in dbt, where a test covers the rule. | Type inference (`read_csv_auto`, `union_by_name`); strict casts that fail the load. | A new source column is ignored until someone declares it (it shows up in `extra_columns`), and the column lists are kept by hand. |
+| **Iceberg written by pyiceberg, read by DuckDB; no Spark** (`catalog.py`, `expose.py`) | Three cities fit easily on one machine, and on AWS in one Fargate task. Each `airbnb transform` reads views over `iceberg_scan('<metadata.json>')` pinned to the snapshot current when it starts, so a load that commits mid-run cannot change what dbt sees. The same tables register in SQLite locally and in Glue on AWS. | Spark on EMR or Glue; plain Parquet folders and a crawler; copying bronze into DuckDB (kept as the `AIRBNB_BRONZE_EXPOSE=table` fallback). | Writes are single-process and memory-bound: a city's calendar load needs about 4 GB (`infra/variables.tf`). Locally the marts are DuckDB tables; they become Iceberg only on Athena (`+table_type: iceberg`). |
+| **Idempotent at every layer** | A rerun with nothing new leaves the data unchanged. Landed snapshots are skipped. A bronze load is skipped when its source SHA-256 matches `load_audit`, and a forced load is an Iceberg overwrite of exactly its `(city, snapshot_date)` partition (reviews: the city, because each file is cumulative). The e2e suite compares content hashes of the SCD2 table and 11 mart tables before and after a rerun. | Append-only loads with downstream dedupe; `MERGE` on business keys; truncate and reload. | Skipping trusts the source hash, so a changed load rule needs `airbnb bronze --force`. Only the newest reviews file is kept, so reviews of delisted listings disappear. |
+| **SCD2 on a replay clock** (`transform.py`, `dbt/macros/snapshot_time.sql`) | dbt snapshots normally stamp "now". Each snapshot date is replayed as its own round with `snapshot_get_time()` overridden, so `valid_from` is the date Inside Airbnb observed the change and rebuilds are deterministic. `ops.scd2_rounds` records applied rounds: a rerun with nothing new applies none, and a snapshot older than the last applied round forces a full replay. Every other model is a view or a table rebuilt each run, so the snapshot is the only stateful model. | dbt's run-time clock; a hand-written SCD2 `MERGE`; incremental marts. | Every run rebuilds and re-tests all marts (the whole rerun with nothing new took 1 min 38 s on the development laptop). A backfill replays the whole history. Bedrooms, beds and bathrooms are carried but not tracked, because their scrape coverage swings between snapshots. |
+| **Data-quality gates are states** (`quality/checks.py`) | 4 landing, 16 bronze and 10 mart checks sit between the layers, alongside dbt's 77 data tests. An error-level failure exits 3, fails the state and stops the run before the next layer is built or anything is published. Warnings are recorded and shown on the site. A check that fails to run counts as failed. | dbt tests only; a separate framework such as Great Expectations or Soda; alerting without blocking. | One failed gate blocks the whole run, site included. Warning thresholds, such as the 14-day scrape window and the 20% sentiment-signal floor, are hand-picked. |
+| **Reconcile with the publisher's own figures** (`verify.py`) | Internal reconciliations prove that the layers agree, not that the numbers are right. Headless Chrome renders each live city dashboard, and its figures are compared with marts that reproduce the dashboard's conventions (`scope = 'dashboard_default'`, whole-unit prices in `dash_*`). | Internal checks only; comparing only with the per-listing `estimated_*` columns (kept as a second, independent check). | Parsing rendered text is brittle and needs Chrome. A failed capture falls back to the stored one, and the output says which. Matching Inside Airbnb's model does not validate the model. |
+| **Respect the source** (`fixtures.py`) | Nothing is republished. The fixture sample is cut from a download (the 120 listings per city with the lowest md5 of their id) and cached in CI by snapshot fingerprint, and `ingest` skips files already landed. Reviewer names are dropped at bronze, and the site shows aggregates and ranks, never host names. | Committing a sample; synthetic data everywhere. | A cold cache or a fresh lake needs network access to insideairbnb.com. Unit tests use synthetic vectors, so among the tests only the e2e and AWS suites see real rows. |
+
+### Stack choices
+
+| Layer | Choice | Why this | Why not the alternatives |
+|---|---|---|---|
+| Language | Python 3.12 (`>=3.12,<3.13`) | Every library the pipeline needs (pyiceberg, DuckDB, dbt, boto3, moto) is Python, so each step is one process and dbt runs in-process through `dbtRunner`. The same minor version is pinned in `pyproject.toml`, `.python-version`, CI and the image. | A JVM language would only pay off with Spark, which this data size does not need. |
+| Table format and catalog | Apache Iceberg via pyiceberg 0.12.0; SQLite `SqlCatalog` locally, AWS Glue Data Catalog on AWS | Atomic partition overwrites, snapshot pinning and additive schema evolution from plain Python. Athena and Glue support Iceberg natively and dbt-athena materialises it, so on AWS bronze and marts share one format. The SQLite catalog gives the same namespaces and metadata files as Glue, with no server. | Delta Lake: dbt-athena's SQL materialisations write Hive or Iceberg, not Delta. Plain Parquet: no atomic replace and no snapshot to pin. A REST catalog (Nessie, Polaris) or a Hive metastore: one more service on the laptop and in CI. |
+| Engine | DuckDB 1.5.6 with the `iceberg` and `httpfs` extensions; pyarrow 26.0.0 | In-process and server-free: one engine reads the gzip CSVs, types bronze, runs the gates and backs dbt, on the laptop or in one task. `iceberg_scan` reads the tables from disk or S3, so on AWS the gates run the same SQL against Glue-registered tables without going through Athena. Arrow carries DuckDB results into pyiceberg. | Spark: a JVM and a cluster for data that fits on one machine (the largest table is 18.2 million calendar rows). pandas: no SQL to share with dbt and the gates. |
+| Transformations | dbt-core 1.12.5; dbt-duckdb 1.11.0 (`dev`, `ci`), dbt-athena 1.11.1 (`athena`) | One tested SQL project with three targets (`dbt/profiles.yml`). A small dispatch layer (`dbt/macros/cross_db.sql`) covers DuckDB/Trino differences, `generate_schema_name` maps each schema to its own Glue database on Athena, and CI compiles every model for Athena offline. Dependabot leaves dbt-core and its adapters to deliberate bumps. | Hand-run SQL scripts: no DAG, tests or docs. Glue Spark jobs: Spark again, billed per DPU-hour, for data that fits on one machine. |
+| Warehouse on AWS | Amazon Athena, engine version 3, in a workgroup with an enforced 10 GiB per-query cutoff | Serverless and billed by data scanned: the cost notes put a monthly build over 262 MB of Parquet at about a cent. It queries the Glue-registered Iceberg tables in place, and nothing runs between builds. | Redshift Serverless or a cluster: capacity to configure for one build a month. DuckDB in Fargate for the marts too: workable, but the marts would sit in a task-local file instead of Glue, where Athena and other tools can query them. |
+| Orchestration | AWS Step Functions (Standard) started by EventBridge Scheduler; a GitHub Actions cron for the live refresh | One JSON file holds `ecs:runTask.sync`, `Retry`, `Catch` and the SNS failure path, and the local runner can interpret it. At one run a month it stays inside the free tier (cost notes). The scheduler adds a flexible window and its own retries. The free refresh walks the same definition on a GitHub runner. | Amazon MWAA (Airflow): an environment billed by the hour whether or not anything runs. Dagster or Prefect: another service to host. Cron on an EC2 instance: a server to patch. |
+| Compute | ECS Fargate, 2 vCPU / 8 GB; one image (`python:3.12-slim-bookworm`, uv 0.10.2) | No idle compute cost and no servers. Every state runs the same image with a different `airbnb` sub-command, as a non-root user on a read-only root filesystem (both checked by the CI Docker job), with a 50 GiB scratch volume. Steps pass the run plan through S3 (`state/plan.json`). | Lambda: a 15-minute limit and a Lambda-specific image or zip. AWS Batch: queues and compute environments for one task at a time. EMR Serverless: a Spark runtime for data that fits in memory. |
+| AWS SDK and emulators | boto3 1.43.110; moto 5.2.3 (server mode); LocalStack 2026.09.1 (CI only) | moto runs in-process with no Docker (the development laptop has none) and covers S3, Glue, Step Functions, Scheduler, SNS and Athena. LocalStack gives CI a second, independent emulator. `aws/smoke.py` always points boto3 at an emulator with dummy credentials. | Real AWS in CI: an account, credentials and a bill for every push. LocalStack alone: Docker locally and, for current images, an auth token. |
+| Infrastructure as code | Terraform 1.16.5, hashicorp/aws 6.68.0, tflint 0.64.0 (aws ruleset 0.47.0), checkov 3.3.26 | Ten small modules under one root, with `infra/envs/dev.tfvars` and `infra/envs/prod.tfvars`. CI checks the whole stack without an AWS account: `fmt`, `validate` after `init -backend=false`, tflint, and checkov with every skip justified inline. `templatefile()` renders the shared ASL file. S3 state with native locking is one copy of `infra/backend.tf.example` away. | AWS CDK: Python bindings exist, but the CLI needs Node.js, and an offline check means synthesising CloudFormation first. |
+| CI/CD and auth | GitHub Actions, every action pinned to a commit SHA; GitHub OIDC for the deploy role | Free for a public repository. The refresh needs no secrets: Inside Airbnb is public and Pages uses the built-in `GITHUB_TOKEN`. `deploy.yml` assumes an IAM role through OIDC that trusts only `main` and the `aws` environment, so no static AWS keys exist. | IAM user access keys in repository secrets: long-lived and in need of rotation. CodePipeline or CodeBuild: an AWS account before any CI could run. |
+| Packaging and quality | uv (`uv.lock`), hatchling, ruff 0.16.10, pytest 9.1.1, pre-commit 4.6.2 (with gitleaks 8.30.1), Dependabot | `uv sync --frozen` installs exactly the locked versions on the laptop, in CI and in the image. ruff covers linting and formatting; pytest markers (`e2e`, `aws`) separate the slow suites; pre-commit runs the same hooks locally and in CI. | pip-tools or Poetry would also work; uv is much faster, and the same tool runs on the laptop, in CI (`setup-uv`) and in the Dockerfile. flake8, black and isort: three tools for what ruff does here. |
+| Results site | Jinja2 3.1.6, inline CSS and SVG (`report/charts.py`); GitHub Pages, or S3 when `AIRBNB_SITE_BUCKET` is set | A static page and `summary.json`, with every number read from the warehouse at build time. No server and no build step, and it publishes unchanged to Pages or S3. | QuickSight, Superset or Metabase: a running service and logins for a page that changes once a month. A JavaScript charting library: a dependency and a bundle for one line chart. |
+| Dashboard capture | The system Chrome, Chromium or Edge, run with `--headless=new --dump-dom` (`verify.py`) | The dashboards compute their figures in the browser. One subprocess call returns the rendered DOM without adding a Python dependency. | Playwright or Selenium: a driver package and a managed browser for one page per city. |
+
+### What would change in production
+
+* **A real account, and Athena executed.** Nothing here has been applied (see
+  [Limitations](#limitations)). A first deployment would `terraform apply` the dev environment
+  with the S3 backend, push the image through `deploy.yml` and run the state machine end to end
+  before relying on the schedule. Medians there can differ slightly from the DuckDB build,
+  because they compile to `approx_percentile` on Athena (`dbt/macros/cross_db.sql`).
+* **Run state that survives a task.** Locally, and on the refresh runner, every step shares one
+  data directory, so the DuckDB file and `state/` carry over between steps (and, through the
+  cache, between runs). Each Fargate task starts with an empty scratch volume, so on AWS
+  `airbnb transform` would need `bronze.snapshots` exposed from Glue before it lists rounds, the
+  SCD2 ledger (`ops.scd2_rounds`) would move into the catalog, for example as a small Iceberg
+  table, and `airbnb report` would read the plan and gate summaries from S3, where `discover`
+  and `dq` already write copies.
+* **The lake in S3, not in a cache.** `refresh.yml` keeps landing, Iceberg and the warehouse in
+  an Actions cache between monthly runs. GitHub evicts caches that go unused; when nothing is
+  restored, the run starts from a full download and the SCD2 history restarts from the snapshots
+  in the current plan. The Terraform lake bucket (versioned, SSE-KMS, landing files moved to
+  Infrequent Access after 30 days) is the durable home.
+* **Retries and fan-out.** The deployed definition retries each task up to twice, with backoff,
+  on ECS errors and timeouts; the local runner fails fast and supports no `Map` or `Parallel`
+  state. Many more cities would fan landing and bronze out per city with a `Map` state, which the
+  local runner would have to learn, instead of one task looping over every snapshot. Spark would
+  only be worth it once a single city outgrew one 2 vCPU / 8 GB task.
+* **A stricter network.** Tasks get a public IP in public subnets, with egress limited to TCP 443
+  and an S3 gateway endpoint, because a NAT gateway alone costs about $32 a month. A production
+  network would put them in private subnets behind a NAT gateway or an egress proxy, with
+  interface endpoints for ECR, CloudWatch Logs, Glue and Athena.
 
 ## Limitations
 
